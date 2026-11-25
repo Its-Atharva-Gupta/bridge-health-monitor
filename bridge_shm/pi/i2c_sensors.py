@@ -148,28 +148,46 @@ class BME280:
 
 # --------------------------------------------------------------------- ADS1115
 class ADS1115:
-    """16-bit analog input. Range +/-4.096 V (enough for 3.3 V signals)."""
+    """16-bit analog input.
+
+    read_volts(ch)      single-ended, +/-4.096 V range (sag sensor, quick checks)
+    read_diff(fsr=...)  DIFFERENTIAL A0-A1 (or A2-A3) on a small range, for bridge
+                        circuits like strain gauges and load cells (signals of ~1 mV)
+    """
     VOLTS_PER_LSB = 4.096 / 32768
+    PGA = {6.144: 0, 4.096: 1, 2.048: 2, 1.024: 3, 0.512: 4, 0.256: 5}     # range (V) -> code
+    RATES = {8: 0, 16: 1, 32: 2, 64: 3, 128: 4, 250: 5, 475: 6, 860: 7}     # samples/s -> code
+    MUX = {"A0-A1": 0, "A0-A3": 1, "A1-A3": 2, "A2-A3": 3, "A0": 4, "A1": 5, "A2": 6, "A3": 7}
 
     def __init__(self, bus, address=0x48):
         self.bus, self.addr = bus, address
 
-    @staticmethod
-    def config_word(channel):
-        # start | single-ended AINx | +/-4.096 V | single-shot | 860 samples/s | comparator off
-        return (1 << 15) | ((4 + channel) << 12) | (1 << 9) | (1 << 8) | (7 << 5) | 0x03
+    @classmethod
+    def config_word(cls, channel, fsr=4.096, rate=860):
+        """channel: 0-3 (single-ended) or a MUX name like "A0-A1"."""
+        mux = cls.MUX[channel] if isinstance(channel, str) else 4 + channel
+        # start | input | range | single-shot | rate | comparator off
+        return ((1 << 15) | (mux << 12) | (cls.PGA[fsr] << 9) | (1 << 8)
+                | (cls.RATES[rate] << 5) | 0x03)
 
-    def read_volts(self, channel=0):
-        cfg = self.config_word(channel)
+    def _convert(self, channel, fsr, rate):
+        cfg = self.config_word(channel, fsr, rate)
         self.bus.write_i2c_block_data(self.addr, 0x01, [cfg >> 8, cfg & 0xFF])
-        for _ in range(50):
-            time.sleep(0.0015)
+        time.sleep(1.0 / rate)
+        for _ in range(100):
             hi, lo = self.bus.read_i2c_block_data(self.addr, 0x01, 2)
             if hi & 0x80:                                         # conversion finished
                 break
+            time.sleep(0.001)
         hi, lo = self.bus.read_i2c_block_data(self.addr, 0x00, 2)
-        raw = struct.unpack(">h", bytes([hi, lo]))[0]
-        return raw * self.VOLTS_PER_LSB
+        return struct.unpack(">h", bytes([hi, lo]))[0] * fsr / 32768
+
+    def read_volts(self, channel=0):
+        return self._convert(channel, 4.096, 860)
+
+    def read_diff(self, pair="A0-A1", fsr=0.256, rate=64):
+        """Voltage of the first input minus the second, in volts."""
+        return self._convert(pair, fsr, rate)
 
 
 # --------------------------------------------------------------------- DHT11 / DHT22

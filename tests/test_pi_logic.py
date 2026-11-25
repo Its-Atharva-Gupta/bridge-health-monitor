@@ -79,3 +79,8 @@ def test_crackle_detector_counts_bursts():
     tab = det.table()
     assert len(tab) == 3
     assert np.allclose(tab.t_s, [0.3, 0.9, 1.5], atol=0.005)
+
+
+def test_ads1115_differential_config_word():
+    # A0-A1, +/-0.256 V, single shot, 64 SPS, comparator off
+    assert ADS1115.config_word("A0-A1", 0.256, 64) == 0x8B63

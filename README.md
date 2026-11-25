@@ -40,6 +40,9 @@ python -m bridge_shm.pi.calibrate strain           # once the gauges are fitted
 python -m bridge_shm.pi.run_test --plank P1 --stage D0 --cycles 5
 ```
 
+Load cell readings jumpy? `python -m bridge_shm.pi.diag_ads` reads the load cell through an
+ADS1115 instead of the HX711 (wiring is in the file's header) to find which one is at fault.
+
 Turn sensors on/off in `rig_config.json` (created on first run; `"enabled": true/false`).
 Without a sag sensor, sag is estimated from the tilt of the two MPU6050s. Without strain
 gauges (or with one MPU), the model simply leaves those features out.
