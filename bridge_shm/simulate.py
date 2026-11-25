@@ -79,7 +79,7 @@ def simulate_cycle(rng, stage, temp_c, rh_pct):
         # load cell under the RIGHT support, calibrated with the load at midspan
         g_meas = g * x_load / C.LOAD_X_MM + rng.normal(0, 1.5)
         rows.append(dict(
-            phase=phase, load_g=round(g_meas, 2), sag_mm=sag,
+            phase=phase, nominal_g=g, load_g=round(g_meas, 2), sag_mm=sag,
             strain_l_ue=eps_l * F * 1e6 + rng.normal(0, STRAIN_NOISE_UE),
             strain_r_ue=eps_r * F * 1e6 + rng.normal(0, STRAIN_NOISE_UE),
             tilt_deg=tl, tilt2_deg=tr,

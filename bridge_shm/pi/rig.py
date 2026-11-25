@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "i2c_bus": 1,
     # HX711 #1: load cell under one support. Calibrated with a known weight at MIDSPAN,
     # so readings are directly "grams on the bridge" (no x2 needed).
+    # If it fails, set "enabled": false: the analysis then uses the weights you add.
     "load": {"enabled": True, "dout": 5, "sck": 6, "g_per_count": None},
     # HX711 #2 and #3: strain gauges (left / right of centre). Off until fitted.
     "strain_l": {"enabled": False, "dout": 17, "sck": 27, "gauge_factor": 2.0, "sign": 1},

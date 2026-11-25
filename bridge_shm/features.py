@@ -143,12 +143,16 @@ def ae_features(ae):
 
 
 # Sensors that can be left out (for real rigs missing a sensor, or the sensor study)
-DROPPABLE = ("strain", "mpu2", "ae", "tap")
+DROPPABLE = ("strain", "mpu2", "ae", "tap", "load")
 
 
 def extract(cycle_dir, drop=()):
     """One feature row. `drop` pretends sensors were absent, e.g. drop=("strain", "mpu2")."""
     meta, steps, tap, ae = load_cycle(cycle_dir)
+    if ("load" in drop or steps.load_g.isna().any()) and "nominal_g" in steps:
+        # no load cell (or it failed): trust the weights you put in the cup instead
+        steps = steps.copy()
+        steps["load_g"] = steps["nominal_g"].astype(float)
     if "mpu2" in drop and "tilt2_deg" in steps:
         steps = steps.copy()
         steps["tilt2_deg"] = np.nan

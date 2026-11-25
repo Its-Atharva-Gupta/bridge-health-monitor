@@ -26,6 +26,7 @@ SCENARIOS = [
     ("1 MPU + piezo (no strain gauges)", ("strain", "mpu2")),
     ("2 MPUs, no strain, no piezo", ("strain", "ae")),
     ("2 MPUs, no strain, no tap test", ("strain", "tap")),
+    ("2 MPUs + piezo, no strain, NO LOAD CELL", ("strain", "load")),
 ]
 
 
