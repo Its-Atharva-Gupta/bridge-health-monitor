@@ -5,11 +5,18 @@ real Pi logger and the analysis all agree.
 """
 
 # ---- bridge geometry (mm) ----
-SPAN_MM = 270.0            # distance between the two support pencils
+# Plywood plank resting (not nailed) on two supports: wooden pillars on the left,
+# the load cell on the right. Load hangs at midspan.
+SPAN_MM = 270.0            # distance between the two supports
 LOAD_X_MM = 135.0          # load position measured from the left support (midspan)
-GAUGE_X_MM = 145.0         # strain gauges: 160 mm from end A = 145 mm from left support
-MPU_X_MM = 67.5            # MPU6050 at quarter span (82.5 mm from end A)
-PLANK_T_MM = 3.0
+GAUGE_L_X_MM = 115.0       # strain gauges (optional): 20 mm left / right of the load
+GAUGE_R_X_MM = 155.0
+MPU_X_MM = 67.5            # MPU6050 #1 at 1/4 span; MPU6050 #2 at 3/4 span (SPAN - MPU_X)
+TAP_X_MM = 90.0            # tap here (1/3 span): off-centre, so it rings both vibration modes
+PLANK_T_MM = 2.5
+
+# beam theory (point load at midspan): midspan sag / slope at the MPU positions
+SAG_PER_TILT_RAD = SPAN_MM ** 3 / (3 * (SPAN_MM ** 2 - 4 * MPU_X_MM ** 2))
 
 # ---- test protocol ----
 LOAD_STEPS_G = [0, 100, 200, 300, 400, 500, 600]   # loading; unloading runs back down
@@ -35,7 +42,9 @@ FEATURES = [
     "strain_per_n_l",       # left gauge microstrain per newton
     "strain_per_n_r",       # right gauge microstrain per newton
     "strain_ratio_lr",      # left / right: one-sided damage
-    "freq_hz",              # natural frequency from the tap test
+    "tilt_ratio_lr",        # MPU at 1/4 vs MPU at 3/4 tilt per newton: one-sided damage
+    "freq_hz",              # natural frequency from the tap test (mode 1)
+    "freq2_hz",             # second vibration mode (left half up, right half down)
     "damping_ratio",        # how fast the tap vibration dies out
     "ae_count_log",         # log(1 + number of crackles)
     "ae_energy_log",        # log(1 + total crackle energy)

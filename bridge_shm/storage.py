@@ -2,8 +2,9 @@
 
 data/<plank>/<stage>/<cycle_id>/
     meta.json   cycle id, plank, stage, time, temperature, humidity, source
-    steps.csv   one row per load step: phase, load_g, sag_mm, strain_l_ue, strain_r_ue, tilt_deg
-    tap.csv     t_s, accel_g        (MPU6050 vertical acceleration after a tap)
+    steps.csv   one row per load step: phase, load_g, sag_mm, strain_l_ue, strain_r_ue,
+                tilt_deg (MPU at 1/4 span), tilt2_deg (MPU at 3/4 span; empty if only one MPU)
+    tap.csv     t_s, accel_g, accel2_g   (vertical acceleration of each MPU after a tap)
     ae.csv      t_s, amplitude, energy   (one row per detected crackle; may be empty)
 
 Plain CSV/JSON on purpose: you can open every file in Excel or a text editor.

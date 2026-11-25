@@ -59,21 +59,25 @@ def run_cycle(rig, ask, plank, stage, root, hold, notes=""):
         r.update(phase=phase, nominal_g=g)
         rows.append(r)
         print(f"    load {r['load_g']:7.1f} g   sag {r['sag_mm']:6.2f} mm   "
+              f"tilt L {r['tilt_deg']:6.2f}  R {r['tilt2_deg']:6.2f} deg   "
               f"strain L {r['strain_l_ue']:7.1f}  R {r['strain_r_ue']:7.1f}")
 
     ae = listener.stop()[0] if listener else pd.DataFrame(columns=["t_s", "amplitude", "energy"])
 
     while True:
-        ask("TAP TEST: after pressing Enter, tap the marked spot ONCE with a pencil, within 1 second.")
-        t, acc = rig.record_tap(3.0)
-        if np.abs(acc - np.median(acc)).max() > 0.05:
+        ask(f"TAP TEST: after pressing Enter, tap the marked spot ({C.TAP_X_MM:.0f} mm from the left "
+            "support) ONCE with a pencil, within 1 second.")
+        t, acc, acc2 = rig.record_tap(3.0)
+        tap = pd.DataFrame(dict(t_s=t, accel_g=acc, accel2_g=acc2 if acc2 is not None else np.nan))
+        problem = tap_problem(tap)
+        if not problem:
             break
-        print("    No clear tap detected (signal too small). Let's redo it.")
-    tap = pd.DataFrame(dict(t_s=t, accel_g=acc))
+        print(f"    {problem} Let's redo it.")
 
     steps = pd.DataFrame(rows)
     sag_source = steps.pop("sag_source").iloc[0] if "sag_source" in steps else "sensor"
-    steps = steps[["phase", "nominal_g", "load_g", "sag_mm", "strain_l_ue", "strain_r_ue", "tilt_deg"]]
+    steps = steps[["phase", "nominal_g", "load_g", "sag_mm", "strain_l_ue", "strain_r_ue",
+                   "tilt_deg", "tilt2_deg"]]
     meta = dict(cycle_id=next_cycle_id(root, plank), plank=plank, stage=stage,
                 timestamp=datetime.now().isoformat(timespec="seconds"),
                 temp_c=round(float(temp), 2), rh_pct=round(float(rh), 2),
@@ -84,10 +88,26 @@ def run_cycle(rig, ask, plank, stage, root, hold, notes=""):
     f = extract(d)
     print(f"\n  Saved {d}")
     print(f"  stiffness {f['stiffness_n_per_mm']:.3f} N/mm | sag@max {f['sag_at_max_mm']:.2f} mm | "
-          f"freq {f['freq_hz']:.1f} Hz | damping {f['damping_ratio']:.4f} | crackles {len(ae)} | "
+          f"freq {f['freq_hz']:.1f} / {f['freq2_hz']:.1f} Hz | damping {f['damping_ratio']:.4f} | "
+          f"tilt L/R {f['tilt_ratio_lr']:.3f} | crackles {len(ae)} | "
           f"{temp:.1f} C {rh:.0f}%")
     sanity(steps)
     return d
+
+
+def tap_problem(tap):
+    """Reasons to redo the tap test right away (None = fine)."""
+    chans = [c for c in ("accel_g", "accel2_g") if tap[c].notna().all()]
+    if max(np.abs(tap[c] - tap[c].median()).max() for c in chans) < 0.05:
+        return "No clear tap detected (signal too small)."
+    if len(chans) == 2:
+        # both MPUs sit on the same plank, so they must agree on its frequency
+        from ..features import _one_channel
+        fs = 1.0 / np.median(np.diff(tap.t_s))
+        f1, f2 = (_one_channel(tap[c].to_numpy(), fs, 5.0, 300.0)[0] for c in chans)
+        if abs(f1 - f2) > 0.03 * max(f1, f2):
+            return f"The two MPUs disagree on the frequency ({f1:.1f} vs {f2:.1f} Hz)."
+    return None
 
 
 def sanity(steps):

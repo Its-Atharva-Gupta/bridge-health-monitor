@@ -1,12 +1,17 @@
-"""Simulated test cycles, so the whole pipeline can be built before the bridge exists.
+"""Simulated test cycles, so the whole pipeline can be built before real data exists.
 
-Physics: simply supported balsa plank, point load at midspan (same numbers as the
-bridge design: ~7.2 mm sag at 600 g). Adds sensor noise, humidity/temperature
-drift, tap-strength variation and the D0-D3 damage stages.
+Physics (see beam.py): plywood plank resting on two supports, point load at
+midspan, damage = zones where the plank is weaker. From that one beam model we get
+what every sensor would read: the load cell (under the RIGHT support), both MPU
+tilts (1/4 and 3/4 span), sag estimated from those tilts (no sag sensor), the
+optional strain gauges, and the tap-test vibration of both MPUs.
 
-IMPORTANT: the damage effect sizes below are educated guesses. The real
-experiment decides how detectable each stage is; never put simulated results
-on the poster.
+Realistic error sources: sensor noise, the load cup sitting slightly off-centre
+(different every cycle), tap strength/position, humidity/temperature drift.
+
+IMPORTANT: the damage sizes and the non-geometric effects (crackles, damping,
+hysteresis) are educated guesses. The real experiment decides how detectable each
+stage is; never put simulated results on the poster.
 
 Usage:  python -m bridge_shm.simulate --out data/sim
 """
@@ -16,77 +21,93 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
+from . import beam
 from . import config as C
 from .storage import save_cycle
 
-K0_N_PER_MM = 0.823        # healthy stiffness: 5.886 N / 7.15 mm
-F0_HZ = 60.0               # healthy natural frequency (plank + MPU6050 mass)
-ZETA0 = 0.015              # healthy damping ratio
+K0_N_PER_MM = 1.31         # healthy stiffness: ~1 kg at midspan -> ~7.5 mm sag (plywood)
+F0_HZ = 50.0               # healthy 1st natural frequency (plank + two MPU boards)
+ZETA0 = 0.015              # healthy damping, mode 1
+ZETA2 = 0.020              # healthy damping, mode 2
+LOAD_POS_SD_MM = 1.5       # how far off-centre the load cup ends up (per cycle)
+TILT_NOISE_DEG = 0.02      # MPU6050 tilt noise after averaging 0.5 s
+STRAIN_NOISE_UE = 3.0
+ACC_NOISE_G = 0.008
 
-# per-stage changes (guesses, see module docstring)
+# damage: (start mm, end mm, stiffness multiplier) measured from the LEFT support
 STAGE = {
-    #       sag x   L/R asym  +damping  crackles  softening  hysteresis  residual mm
-    "D0": dict(sag=1.000, asym=0.00, dz=0.000, ae=0.5, beta=0.02, hyst=0.010, resid=0.010),
-    "D1": dict(sag=1.007, asym=0.03, dz=0.002, ae=2.0, beta=0.03, hyst=0.014, resid=0.020),
-    "D2": dict(sag=1.130, asym=0.07, dz=0.004, ae=4.0, beta=0.05, hyst=0.022, resid=0.040),
-    "D3": dict(sag=1.400, asym=0.04, dz=0.007, ae=8.0, beta=0.08, hyst=0.035, resid=0.080),
+    "D0": dict(zones=(), dz=0.000, ae=0.5, beta=0.02, hyst=0.010, resid=0.010),
+    "D1": dict(zones=((108, 112, 0.70),), dz=0.002, ae=2.0, beta=0.03, hyst=0.014, resid=0.020),
+    "D2": dict(zones=((80, 115, 0.70),), dz=0.004, ae=4.0, beta=0.05, hyst=0.022, resid=0.040),
+    "D3": dict(zones=((95, 130, 0.45),), dz=0.007, ae=8.0, beta=0.08, hyst=0.035, resid=0.080),
 }
 
 
 def env_factor(temp_c, rh_pct):
-    """Balsa gets softer when damp or warm."""
+    """Wood gets softer when damp or warm."""
     return 1.0 - 0.003 * (rh_pct - 55.0) - 0.002 * (temp_c - 27.0)
 
 
 def simulate_cycle(rng, stage, temp_c, rh_pct):
     s = STAGE[stage]
-    k_env = K0_N_PER_MM * env_factor(temp_c, rh_pct)          # undamaged, today's weather
-    k = k_env / s["sag"] * rng.normal(1, 0.007)               # whole-bridge stiffness
     L = C.SPAN_MM
-    EI = L ** 3 * k / 48.0          # "effective" EI, used for global quantities (tilt)
-    # the gauges sit OUTSIDE the damage zone: the moment there is fixed by statics
-    # and the local section is undamaged, so their strain only feels the weather
-    EI_gauge = L ** 3 * k_env / 48.0
+    zones = s["zones"]
+    env = env_factor(temp_c, rh_pct) * rng.normal(1, 0.004)      # + small plank-to-plank scatter
+    EI = L ** 3 * K0_N_PER_MM * env / 48.0                       # N*mm^2
+    x_load = C.LOAD_X_MM + rng.normal(0, LOAD_POS_SD_MM)
+    x, w1, s1, M1 = beam.static(1.0, x_load, zones, EI)          # response to 1 N
+    at = lambda arr, X: float(np.interp(X, x, arr))
+    th_l, th_r = at(s1, C.MPU_X_MM), at(s1, L - C.MPU_X_MM)     # rad per N (left +, right -)
+    eps_l = at(M1, C.GAUGE_L_X_MM) * C.PLANK_T_MM / 2 / (EI * beam.ei_factor(np.array([C.GAUGE_L_X_MM]), zones)[0])
+    eps_r = at(M1, C.GAUGE_R_X_MM) * C.PLANK_T_MM / 2 / (EI * beam.ei_factor(np.array([C.GAUGE_R_X_MM]), zones)[0])
     Fmax = max(C.LOAD_STEPS_G) * C.G
+    sag_max = at(w1, C.LOAD_X_MM) * Fmax
 
     rows = []
     loads = C.LOAD_STEPS_G + C.LOAD_STEPS_G[-2::-1]
     for i, g in enumerate(loads):
         phase = "load" if i < len(C.LOAD_STEPS_G) else "unload"
-        g_meas = g + rng.normal(0, 1.5)                       # load cell noise
         F = g * C.G
-        sag = F / k * (1 + s["beta"] * F / Fmax)
+        scale = F * (1 + s["beta"] * F / Fmax)                  # softening at high load
+        extra = 0.0                                              # leftover sag while unloading (mm)
         if phase == "unload":
-            dmax = Fmax / k
-            sag += s["resid"] * (1 - F / Fmax) + s["hyst"] * dmax * np.sin(np.pi * F / Fmax)
-        # bending moment at the gauges (right of the load): M = F/2 * (L - x)
-        M = F / 2 * (L - C.GAUGE_X_MM)
-        eps = M * (C.PLANK_T_MM / 2) / EI_gauge * 1e6         # microstrain
-        x = C.MPU_X_MM
-        tilt = np.degrees(F * (L ** 2 - 4 * x ** 2) / (16 * EI))
+            extra = s["resid"] * (1 - F / Fmax) + s["hyst"] * sag_max * np.sin(np.pi * F / Fmax)
+        k = extra / max(at(w1, C.LOAD_X_MM), 1e-12)             # same shape, expressed as extra newtons
+        tl = np.degrees((scale + k) * th_l) + rng.normal(0, TILT_NOISE_DEG)
+        tr = np.degrees((scale + k) * th_r) + rng.normal(0, TILT_NOISE_DEG)
+        sag = np.mean([abs(np.radians(tl)), abs(np.radians(tr))]) * C.SAG_PER_TILT_RAD
+        # load cell under the RIGHT support, calibrated with the load at midspan
+        g_meas = g * x_load / C.LOAD_X_MM + rng.normal(0, 1.5)
         rows.append(dict(
-            phase=phase, load_g=round(g_meas, 2),
-            sag_mm=sag + rng.normal(0, 0.03),
-            strain_l_ue=eps * (1 + s["asym"]) + rng.normal(0, 3),
-            strain_r_ue=eps + rng.normal(0, 3),
-            tilt_deg=tilt + rng.normal(0, 0.02),
+            phase=phase, load_g=round(g_meas, 2), sag_mm=sag,
+            strain_l_ue=eps_l * F * 1e6 + rng.normal(0, STRAIN_NOISE_UE),
+            strain_r_ue=eps_r * F * 1e6 + rng.normal(0, STRAIN_NOISE_UE),
+            tilt_deg=tl, tilt2_deg=tr,
         ))
     steps = pd.DataFrame(rows)
 
-    # tap test: decaying vibration at the natural frequency (+ a weaker 2nd mode)
-    f = F0_HZ * np.sqrt(k / K0_N_PER_MM)
-    zeta = ZETA0 + s["dz"] + rng.normal(0, 0.0008)
-    t = np.arange(0, C.TAP_SECONDS, 1 / C.TAP_FS_HZ)
-    t0 = 0.2
+    # tap test: both modes ring; each MPU sees them weighted by the mode shapes
+    o1, o2, nodes, sh1, sh2 = beam.modes(zones)
+    h1, _, _, _, _ = beam.modes(())
+    f1 = F0_HZ * np.sqrt(env) * o1 / h1
+    f2 = F0_HZ * np.sqrt(env) * o2 / h1
+    z1 = ZETA0 + s["dz"] + rng.normal(0, 0.0008)
+    z2 = ZETA2 + s["dz"] + rng.normal(0, 0.0010)
+    x_tap = C.TAP_X_MM + rng.normal(0, 3)
+    t = np.arange(0, 3.0, 1 / C.TAP_FS_HZ)
+    t0 = rng.uniform(0.2, 0.6)
     tt = np.clip(t - t0, 0, None)
-    A = rng.uniform(0.3, 0.8)                                 # tap strength varies
-    wd = 2 * np.pi * f * np.sqrt(1 - zeta ** 2)
-    acc = A * np.exp(-zeta * 2 * np.pi * f * tt) * np.sin(wd * tt)
-    f2 = 3.9 * f
-    acc += 0.3 * A * np.exp(-0.03 * 2 * np.pi * f2 * tt) * np.sin(2 * np.pi * f2 * tt)
-    acc[t < t0] = 0
-    acc += rng.normal(0, 0.01, t.size)
-    tap = pd.DataFrame(dict(t_s=t, accel_g=acc))
+    A = rng.uniform(0.3, 0.8)                                  # tap strength varies
+
+    def ring(xs):
+        a = np.zeros_like(t)
+        for f, z, sh, wgt in ((f1, z1, sh1, 1.0), (f2, z2, sh2, 0.5)):
+            amp = A * wgt * beam.shape_at(nodes, sh, x_tap) * beam.shape_at(nodes, sh, xs)
+            a += amp * np.exp(-z * 2 * np.pi * f * tt) * np.sin(2 * np.pi * f * np.sqrt(1 - z * z) * tt)
+        a[t < t0] = 0
+        return a + rng.normal(0, ACC_NOISE_G, t.size)
+
+    tap = pd.DataFrame(dict(t_s=t, accel_g=ring(C.MPU_X_MM), accel2_g=ring(L - C.MPU_X_MM)))
 
     # crackles during loading
     n = rng.poisson(s["ae"])
@@ -109,7 +130,7 @@ def simulate_dataset(out, seed=0, n_healthy=36, n_damaged=12):
                 steps, tap, ae = simulate_cycle(rng, stage, temp, rh)
                 meta = dict(cycle_id=f"c{cid:04d}", plank="sim_plank", stage=stage,
                             timestamp=t.isoformat(), temp_c=round(temp, 2), rh_pct=round(rh, 2),
-                            source="simulated")
+                            source="simulated", sag_source="tilt")
                 save_cycle(out, meta, steps, tap, ae)
                 cid += 1
                 t += timedelta(minutes=4)

@@ -23,7 +23,10 @@ DEFAULT_CONFIG = {
     # HX711 #2 and #3: strain gauges (left / right of centre). Off until fitted.
     "strain_l": {"enabled": False, "dout": 17, "sck": 27, "gauge_factor": 2.0, "sign": 1},
     "strain_r": {"enabled": False, "dout": 23, "sck": 24, "gauge_factor": 2.0, "sign": 1},
+    # MPU6050 #1 at 1/4 span (AD0 unconnected -> 0x68), #2 at 3/4 span (AD0 to 3.3 V -> 0x69).
+    # Mount both the same way round. Only one fitted? Set mpu6050_2 "enabled": false.
     "mpu6050": {"enabled": True, "address": 0x68, "bridge_axis": "x", "vertical_axis": "z"},
+    "mpu6050_2": {"enabled": True, "address": 0x69, "bridge_axis": "x", "vertical_axis": "z"},
     # temperature + humidity: use ONE of these
     "bme280": {"enabled": False, "address": 0x76},
     "dht": {"enabled": True},          # DHT11 or DHT22 on GPIO4 (kernel driver, see pi_setup.sh --dht)
@@ -35,8 +38,7 @@ DEFAULT_CONFIG = {
     "average_seconds": 1.0,
 }
 
-# beam theory: midspan sag / slope at the MPU position (point load at midspan)
-SAG_PER_TILT_RAD = C.SPAN_MM ** 3 / (3 * (C.SPAN_MM ** 2 - 4 * C.MPU_X_MM ** 2))
+SAG_PER_TILT_RAD = C.SAG_PER_TILT_RAD     # midspan sag / tilt at the MPU positions
 
 
 def load_config(path):
@@ -62,13 +64,14 @@ class Rig:
     def __init__(self, cfg):
         self.cfg = cfg
         self.hx = {}
-        self.mpu = self.bme = self.ads = None
+        self.mpu = self.mpu2 = self.bme = self.ads = None
         if cfg.get("dht", {}).get("enabled") and cfg["bme280"]["enabled"]:
             raise RuntimeError("Enable either bme280 or dht in rig_config.json, not both.")
         if cfg.get("dht", {}).get("enabled"):
             from .i2c_sensors import DHTSysfs
             self.bme = DHTSysfs()          # same read() -> (temp, humidity) interface
         self._tilt0 = 0.0
+        self._tilt0_2 = 0.0
         self._sag_v0 = 0.0
         need_gpio = any(cfg[k]["enabled"] for k in ("load", "strain_l", "strain_r"))
         if need_gpio:
@@ -79,12 +82,20 @@ class Rig:
             for k in ("load", "strain_l", "strain_r"):
                 if cfg[k]["enabled"]:
                     self.hx[k] = HX711(lgpio, self.chip, cfg[k]["dout"], cfg[k]["sck"], name=k)
-        if any(cfg[k]["enabled"] for k in ("mpu6050", "bme280", "sag")):
+        if any(cfg.get(k, {}).get("enabled") for k in ("mpu6050", "mpu6050_2", "bme280", "sag")):
             from smbus2 import SMBus
             from .i2c_sensors import ADS1115, BME280, MPU6050
             self.bus = SMBus(cfg["i2c_bus"])
             if cfg["mpu6050"]["enabled"]:
                 self.mpu = MPU6050(self.bus, cfg["mpu6050"]["address"])
+            if cfg.get("mpu6050_2", {}).get("enabled"):
+                try:
+                    self.mpu2 = MPU6050(self.bus, cfg["mpu6050_2"]["address"])
+                except OSError:
+                    raise RuntimeError(
+                        "Second MPU6050 not found at 0x69. Wire its AD0 pin to 3.3 V and check "
+                        "'i2cdetect -y 1' shows 68 AND 69. Only one MPU? Set mpu6050_2 "
+                        '"enabled": false in rig_config.json.')
             if cfg["bme280"]["enabled"]:
                 self.bme = BME280(self.bus, cfg["bme280"]["address"])
             if cfg["sag"]["enabled"]:
@@ -98,10 +109,11 @@ class Rig:
     def environment(self):
         return self.bme.read() if self.bme else (float("nan"), float("nan"))
 
-    def _tilt_now(self, seconds):
+    def _tilt_now(self, seconds, which="mpu6050"):
         from .i2c_sensors import tilt_deg
-        m = self.cfg["mpu6050"]
-        return tilt_deg(self.mpu.average_accel(seconds), m["bridge_axis"], m["vertical_axis"])
+        m = self.cfg[which]
+        dev = self.mpu if which == "mpu6050" else self.mpu2
+        return tilt_deg(dev.average_accel(seconds), m["bridge_axis"], m["vertical_axis"])
 
     def _sag_volts(self, seconds):
         vals = []
@@ -117,6 +129,8 @@ class Rig:
             h.tare(seconds)
         if self.mpu:
             self._tilt0 = self._tilt_now(seconds)
+        if self.mpu2:
+            self._tilt0_2 = self._tilt_now(seconds, "mpu6050_2")
         if self.ads:
             self._sag_v0 = self._sag_volts(seconds)
 
@@ -140,21 +154,31 @@ class Rig:
             else:
                 row[f"strain_{side}_ue"] = float("nan")
         row["tilt_deg"] = self._tilt_now(min(s, 0.5)) - self._tilt0 if self.mpu else float("nan")
+        row["tilt2_deg"] = (self._tilt_now(min(s, 0.5), "mpu6050_2") - self._tilt0_2
+                            if self.mpu2 else float("nan"))
         if self.has_sag_sensor:
             dv = self._sag_volts(min(s, 0.5)) - self._sag_v0
             row["sag_mm"] = float(np.polyval(self.cfg["sag"]["poly_mm_per_volt"], dv))
             row["sag_source"] = "sensor"
         else:
-            row["sag_mm"] = abs(math.radians(row["tilt_deg"])) * SAG_PER_TILT_RAD
+            # average of both MPUs (they tilt opposite ways, so use the size of each)
+            tilts = [abs(math.radians(row[k])) for k in ("tilt_deg", "tilt2_deg")
+                     if not math.isnan(row[k])]
+            row["sag_mm"] = float(np.mean(tilts)) * SAG_PER_TILT_RAD if tilts else float("nan")
             row["sag_source"] = "tilt"
         return row
 
     def record_tap(self, seconds=3.0):
+        """Returns time, vertical accel of MPU #1, and of MPU #2 (None if not fitted)."""
         if not self.mpu:
             raise RuntimeError("MPU6050 is disabled in rig_config.json")
-        acc = self.mpu.record(seconds, C.TAP_FS_HZ)
-        k = "xyz".index(self.cfg["mpu6050"]["vertical_axis"])
-        return np.arange(len(acc)) / C.TAP_FS_HZ, acc[:, k]
+        from .i2c_sensors import record_together
+        devs = [self.mpu] + ([self.mpu2] if self.mpu2 else [])
+        recs = record_together(devs, seconds, C.TAP_FS_HZ)
+        k1 = "xyz".index(self.cfg["mpu6050"]["vertical_axis"])
+        a1 = recs[0][:, k1]
+        a2 = recs[1][:, "xyz".index(self.cfg["mpu6050_2"]["vertical_axis"])] if self.mpu2 else None
+        return np.arange(len(a1)) / C.TAP_FS_HZ, a1, a2
 
     def crackle_listener(self):
         a = self.cfg["audio"]
@@ -168,7 +192,7 @@ class Rig:
 class FakeRig:
     """Same interface, powered by the simulator. For practising on a laptop."""
 
-    has_sag_sensor = True
+    has_sag_sensor = False          # like the real rig: sag comes from the two MPU tilts
 
     def __init__(self, cfg, stage="D0", seed=None):
         from ..simulate import simulate_cycle
@@ -189,11 +213,11 @@ class FakeRig:
         r = self.steps.iloc[self.i].to_dict()
         self.i += 1
         r.pop("phase")
-        r["sag_source"] = "sensor"
+        r["sag_source"] = "tilt"
         return r
 
     def record_tap(self, seconds=3.0):
-        return self.tap.t_s.to_numpy(), self.tap.accel_g.to_numpy()
+        return self.tap.t_s.to_numpy(), self.tap.accel_g.to_numpy(), self.tap.accel2_g.to_numpy()
 
     def crackle_listener(self):
         ae = self.ae

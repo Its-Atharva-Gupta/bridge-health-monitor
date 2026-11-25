@@ -1,8 +1,9 @@
 """I2C sensors: MPU6050 (tilt + vibration), BME280 (temperature, humidity),
 ADS1115 (analog voltages: sag sensor, flex sensors).
 
-All three share the same two wires: SDA = GPIO2 (pin 3), SCL = GPIO3 (pin 5).
-Check they are found with:  i2cdetect -y 1   (expect 48, 68, 76)
+All share the same two wires: SDA = GPIO2 (pin 3), SCL = GPIO3 (pin 5).
+Two MPU6050s: wire the SECOND one's AD0 pin to 3.3 V so its address becomes 0x69.
+Check they are found with:  i2cdetect -y 1   (expect 68 and 69; 48 = ADS1115, 76 = BME280)
 """
 import math
 import struct
@@ -26,8 +27,10 @@ class MPU6050:
         bus.write_byte_data(address, self.PWR_MGMT_1, 0x80)       # reset
         time.sleep(0.1)
         bus.write_byte_data(address, self.PWR_MGMT_1, 0x01)       # wake, stable clock
-        bus.write_byte_data(address, self.CONFIG, 0x01)           # 184 Hz filter -> 1 kHz internal rate
-        bus.write_byte_data(address, self.SMPLRT_DIV, 0x00)       # 1 kHz output
+        # filter off (accel bandwidth 260 Hz, so the ~180 Hz 2nd vibration mode isn't
+        # muffled). Gyro rate is then 8 kHz, so divide by 8 for a 1 kHz sample rate.
+        bus.write_byte_data(address, self.CONFIG, 0x00)
+        bus.write_byte_data(address, self.SMPLRT_DIV, 0x07)
         bus.write_byte_data(address, self.ACCEL_CONFIG, 0x00)     # +/-2 g
         time.sleep(0.05)
 
@@ -42,36 +45,52 @@ class MPU6050:
             time.sleep(0.002)
         return np.mean(vals, axis=0)
 
-    def record(self, seconds, fs=1000):
-        """Record accelerometer x,y,z at exactly 1 kHz using the chip's FIFO buffer.
-
-        The chip timestamps samples itself (1 per ms), so timing is exact even if
-        Linux is busy. Returns array (n, 3) in g.
-        """
-        from smbus2 import i2c_msg
+    # ---- FIFO recording (exact 1 kHz timing, done by the chip itself) ----
+    def fifo_start(self):
         bus, a = self.bus, self.addr
         bus.write_byte_data(a, self.USER_CTRL, 0x04)              # reset FIFO
         bus.write_byte_data(a, self.FIFO_EN, 0x08)                # accel only
         bus.write_byte_data(a, self.USER_CTRL, 0x40)              # enable FIFO
-        need = int(seconds * fs) * 6
-        buf = bytearray()
-        while len(buf) < need:
-            hi, lo = bus.read_i2c_block_data(a, self.FIFO_COUNT_H, 2)
-            count = (hi << 8) | lo
-            if bus.read_byte_data(a, self.INT_STATUS) & 0x10:
-                raise RuntimeError("MPU6050 FIFO overflowed: is the I2C bus set to 400 kHz? (see pi_setup.sh)")
-            count -= count % 6
-            while count > 0:
-                n = min(count, 240)
-                w, r = i2c_msg.write(a, [self.FIFO_R_W]), i2c_msg.read(a, n)
-                bus.i2c_rdwr(w, r)
-                buf += bytes(r)
-                count -= n
-            time.sleep(0.01)
-        bus.write_byte_data(a, self.USER_CTRL, 0x00)              # stop FIFO
-        bus.write_byte_data(a, self.FIFO_EN, 0x00)
-        buf = bytes(buf[:need])
+        self._buf = bytearray()
+
+    def fifo_drain(self):
+        """Move whatever the chip has buffered into self._buf."""
+        from smbus2 import i2c_msg
+        bus, a = self.bus, self.addr
+        hi, lo = bus.read_i2c_block_data(a, self.FIFO_COUNT_H, 2)
+        count = (hi << 8) | lo
+        if bus.read_byte_data(a, self.INT_STATUS) & 0x10:
+            raise RuntimeError(f"MPU6050 0x{a:02x} FIFO overflowed: is the I2C bus set to 400 kHz? "
+                               "(see pi_setup.sh)")
+        count -= count % 6
+        while count > 0:
+            n = min(count, 240)
+            w, r = i2c_msg.write(a, [self.FIFO_R_W]), i2c_msg.read(a, n)
+            bus.i2c_rdwr(w, r)
+            self._buf += bytes(r)
+            count -= n
+
+    def fifo_stop(self, n_samples):
+        self.bus.write_byte_data(self.addr, self.USER_CTRL, 0x00)
+        self.bus.write_byte_data(self.addr, self.FIFO_EN, 0x00)
+        buf = bytes(self._buf[:n_samples * 6])
         return np.frombuffer(buf, dtype=">i2").reshape(-1, 3).astype(float) / self.LSB_PER_G
+
+    def record(self, seconds, fs=1000):
+        """Record accelerometer x,y,z at 1 kHz. Returns array (n, 3) in g."""
+        return record_together([self], seconds, fs)[0]
+
+
+def record_together(mpus, seconds, fs=1000):
+    """Record several MPU6050s at once (started within a millisecond of each other)."""
+    need = int(seconds * fs)
+    for m in mpus:
+        m.fifo_start()
+    while any(len(m._buf) < need * 6 for m in mpus):
+        for m in mpus:
+            m.fifo_drain()
+        time.sleep(0.005)
+    return [m.fifo_stop(need) for m in mpus]
 
 
 def tilt_deg(accel, bridge_axis="x", vertical_axis="z"):
