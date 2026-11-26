@@ -154,8 +154,10 @@ class Rig:
                 row[f"strain_{side}_ue"] = c["sign"] * counts_to_microstrain(counts, c["gauge_factor"])
             else:
                 row[f"strain_{side}_ue"] = float("nan")
-        row["tilt_deg"] = self._tilt_now(min(s, 0.5)) - self._tilt0 if self.mpu else float("nan")
-        row["tilt2_deg"] = (self._tilt_now(min(s, 0.5), "mpu6050_2") - self._tilt0_2
+        from .i2c_sensors import tilt_change          # works upside down too (under the plank)
+        row["tilt_deg"] = (tilt_change(self._tilt_now(min(s, 0.5)), self._tilt0)
+                           if self.mpu else float("nan"))
+        row["tilt2_deg"] = (tilt_change(self._tilt_now(min(s, 0.5), "mpu6050_2"), self._tilt0_2)
                             if self.mpu2 else float("nan"))
         if self.has_sag_sensor:
             dv = self._sag_volts(min(s, 0.5)) - self._sag_v0

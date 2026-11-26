@@ -100,6 +100,16 @@ def tilt_deg(accel, bridge_axis="x", vertical_axis="z"):
     return math.degrees(math.atan2(accel[i], accel[k]))
 
 
+def tilt_change(now_deg, zero_deg):
+    """Tilt relative to the zero reading, wrapped to -180..180 degrees.
+
+    A board mounted upside down (under the plank) reads close to +/-180 degrees, where
+    a tiny wobble flips the raw angle from +179.9 to -179.9; wrapping keeps that a
+    0.2 degree change instead of 360.
+    """
+    return (now_deg - zero_deg + 180.0) % 360.0 - 180.0
+
+
 # --------------------------------------------------------------------- BME280
 class BME280:
     """Temperature + humidity (Bosch datasheet compensation formulas)."""

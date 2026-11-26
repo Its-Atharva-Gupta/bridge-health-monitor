@@ -54,7 +54,8 @@ gauges (or with one MPU), the model simply leaves those features out.
 - Span (support to support) is set in `bridge_shm/config.py` (`SPAN_MM`, now 480 mm);
   every position below is worked out from it.
 - Strain gauges (optional): underside, 20 mm either side of the centre, along the length.
-- MPU6050 #1 at 1/4 span, #2 at 3/4 span, both mounted the same way round, firmly glued.
+- MPU6050 #1 at 1/4 span, #2 at 3/4 span, both mounted the same way round, firmly glued
+  (top or underside both work; upside-down boards are handled).
 - Tap the plank at 1/3 span (160 mm from the left support on the 480 mm span): off-centre, so both
   vibration modes ring. The two MPUs must agree on the frequency or the test asks for a redo.
 

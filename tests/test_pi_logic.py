@@ -84,3 +84,16 @@ def test_crackle_detector_counts_bursts():
 def test_ads1115_differential_config_word():
     # A0-A1, +/-0.256 V, single shot, 64 SPS, comparator off
     assert ADS1115.config_word("A0-A1", 0.256, 64) == 0x8B63
+
+
+def test_tilt_works_with_mpu_upside_down():
+    import math
+    from bridge_shm.pi.i2c_sensors import tilt_deg, tilt_change
+    def board(angle_deg, upside_down):                 # gravity seen by the board
+        a = math.radians(angle_deg)
+        return (math.sin(a), 0.0, -math.cos(a)) if upside_down else (math.sin(a), 0.0, math.cos(a))
+    for flipped in (False, True):
+        zero = tilt_deg(board(0.05, flipped))          # resting a hair off level
+        for true_change in (0.3, -0.3, 1.0):
+            got = tilt_change(tilt_deg(board(0.05 + true_change, flipped)), zero)
+            assert abs(abs(got) - abs(true_change)) < 1e-6
