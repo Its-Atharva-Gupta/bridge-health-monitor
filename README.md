@@ -51,8 +51,11 @@ gauges (or with one MPU), the model simply leaves those features out.
 - The plank **rests** on both supports (not nailed): pillars on the left, the load cell's
   free end (with a small flat pad) on the right. Small guide blocks stop it sliding off.
 - Load cup at the exact centre, hanging freely; nothing under the plank touches the base.
+- Span (support to support) is set in `bridge_shm/config.py` (`SPAN_MM`, now 480 mm);
+  every position below is worked out from it.
+- Strain gauges (optional): underside, 20 mm either side of the centre, along the length.
 - MPU6050 #1 at 1/4 span, #2 at 3/4 span, both mounted the same way round, firmly glued.
-- Tap the plank at 1/3 span (90 mm from the left support): off-centre, so both
+- Tap the plank at 1/3 span (160 mm from the left support on the 480 mm span): off-centre, so both
   vibration modes ring. The two MPUs must agree on the frequency or the test asks for a redo.
 
 Practise without hardware (works on the laptop too):

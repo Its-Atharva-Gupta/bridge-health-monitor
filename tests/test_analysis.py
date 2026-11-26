@@ -20,7 +20,7 @@ def test_beam_matches_textbook_formulas():
 
 
 def test_damage_on_left_tilts_left_mpu_more():
-    zones = ((90, 110, 0.6),)
+    zones = ((0.33 * C.SPAN_MM, 0.41 * C.SPAN_MM, 0.6),)   # between the left MPU and the centre
     x, _, s, _ = beam.static(1.0, C.LOAD_X_MM, zones)
     _, _, s0, _ = beam.static(1.0, C.LOAD_X_MM, ())
     left = np.interp(C.MPU_X_MM, x, s) / np.interp(C.MPU_X_MM, x, s0)

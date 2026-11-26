@@ -26,7 +26,7 @@ from . import config as C
 from .storage import save_cycle
 
 K0_N_PER_MM = 1.31         # healthy stiffness: ~1 kg at midspan -> ~7.5 mm sag (plywood)
-F0_HZ = 50.0               # healthy 1st natural frequency (plank + two MPU boards)
+F0_HZ = 30.0               # healthy 1st natural frequency (48 cm plywood plank + two MPU boards)
 ZETA0 = 0.015              # healthy damping, mode 1
 ZETA2 = 0.020              # healthy damping, mode 2
 LOAD_POS_SD_MM = 1.5       # how far off-centre the load cup ends up (per cycle)
@@ -34,12 +34,13 @@ TILT_NOISE_DEG = 0.02      # MPU6050 tilt noise after averaging 0.5 s
 STRAIN_NOISE_UE = 3.0
 ACC_NOISE_G = 0.008
 
-# damage: (start mm, end mm, stiffness multiplier) measured from the LEFT support
+# damage zones: (start, end, stiffness multiplier); start/end are FRACTIONS of the span
+# from the LEFT support, so they scale with the bridge (converted to mm below)
 STAGE = {
     "D0": dict(zones=(), dz=0.000, ae=0.5, beta=0.02, hyst=0.010, resid=0.010),
-    "D1": dict(zones=((108, 112, 0.70),), dz=0.002, ae=2.0, beta=0.03, hyst=0.014, resid=0.020),
-    "D2": dict(zones=((80, 115, 0.70),), dz=0.004, ae=4.0, beta=0.05, hyst=0.022, resid=0.040),
-    "D3": dict(zones=((95, 130, 0.45),), dz=0.007, ae=8.0, beta=0.08, hyst=0.035, resid=0.080),
+    "D1": dict(zones=((0.400, 0.415, 0.70),), dz=0.002, ae=2.0, beta=0.03, hyst=0.014, resid=0.020),
+    "D2": dict(zones=((0.296, 0.426, 0.70),), dz=0.004, ae=4.0, beta=0.05, hyst=0.022, resid=0.040),
+    "D3": dict(zones=((0.352, 0.481, 0.45),), dz=0.007, ae=8.0, beta=0.08, hyst=0.035, resid=0.080),
 }
 
 
@@ -51,7 +52,7 @@ def env_factor(temp_c, rh_pct):
 def simulate_cycle(rng, stage, temp_c, rh_pct):
     s = STAGE[stage]
     L = C.SPAN_MM
-    zones = s["zones"]
+    zones = tuple((a * L, b * L, f) for a, b, f in s["zones"])
     env = env_factor(temp_c, rh_pct) * rng.normal(1, 0.004)      # + small plank-to-plank scatter
     EI = L ** 3 * K0_N_PER_MM * env / 48.0                       # N*mm^2
     x_load = C.LOAD_X_MM + rng.normal(0, LOAD_POS_SD_MM)

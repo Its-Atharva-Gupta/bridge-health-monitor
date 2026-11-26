@@ -7,12 +7,12 @@ real Pi logger and the analysis all agree.
 # ---- bridge geometry (mm) ----
 # Plywood plank resting (not nailed) on two supports: wooden pillars on the left,
 # the load cell on the right. Load hangs at midspan.
-SPAN_MM = 270.0            # distance between the two supports
-LOAD_X_MM = 135.0          # load position measured from the left support (midspan)
-GAUGE_L_X_MM = 115.0       # strain gauges (optional): 20 mm left / right of the load
-GAUGE_R_X_MM = 155.0
-MPU_X_MM = 67.5            # MPU6050 #1 at 1/4 span; MPU6050 #2 at 3/4 span (SPAN - MPU_X)
-TAP_X_MM = 90.0            # tap here (1/3 span): off-centre, so it rings both vibration modes
+SPAN_MM = 480.0            # distance between the two supports (where the plank rests)
+LOAD_X_MM = SPAN_MM / 2    # load position measured from the left support (midspan)
+GAUGE_L_X_MM = LOAD_X_MM - 20.0   # strain gauges (optional): 20 mm left / right of the load
+GAUGE_R_X_MM = LOAD_X_MM + 20.0
+MPU_X_MM = SPAN_MM / 4     # MPU6050 #1 at 1/4 span; MPU6050 #2 at 3/4 span (SPAN - MPU_X)
+TAP_X_MM = SPAN_MM / 3     # tap here (1/3 span): off-centre, so it rings both vibration modes
 PLANK_T_MM = 2.5
 
 # beam theory (point load at midspan): midspan sag / slope at the MPU positions
